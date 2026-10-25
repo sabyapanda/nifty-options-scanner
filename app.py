@@ -54,6 +54,181 @@ def calculate_rsi(data, window=14):
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
+
+def detect_bollinger_squeeze(df, threshold=0.08):
+    if len(df) < 20:
+        return {
+            "exists": False,
+            "status": "Insufficient weekly data",
+            "bandwidth": None,
+            "message": "Not enough weekly candles to evaluate Bollinger squeeze."
+        }
+
+    df = df.copy()
+    df["MA20"] = df["Close"].rolling(20).mean()
+    df["STD20"] = df["Close"].rolling(20).std()
+    df["UpperBB"] = df["MA20"] + (2 * df["STD20"])
+    df["LowerBB"] = df["MA20"] - (2 * df["STD20"])
+
+    bandwidth = (df["UpperBB"].iloc[-1] - df["LowerBB"].iloc[-1]) / df["MA20"].iloc[-1]
+    squeeze = bandwidth < threshold
+    return {
+        "exists": bool(squeeze),
+        "status": "Squeeze Active" if squeeze else "Expansion Active",
+        "bandwidth": bandwidth,
+        "message": "Weekly Bollinger squeeze is active." if squeeze else "Weekly Bollinger bands are expanded, indicating higher volatility."
+    }
+
+
+def detect_rsi_divergence(df, lookback=8):
+    if len(df) < lookback + 2:
+        return {
+            "exists": False,
+            "status": "Insufficient weekly data",
+            "type": None,
+            "message": "Not enough weekly candles for RSI divergence checking."
+        }
+
+    closes = df["Close"].tail(lookback + 2).to_numpy()
+    rsi_values = calculate_rsi(df["Close"]).tail(lookback + 2).to_numpy()
+
+    prev_price_high = np.max(closes[:-1])
+    prev_price_low = np.min(closes[:-1])
+    prev_rsi_high = np.max(rsi_values[:-1])
+    prev_rsi_low = np.min(rsi_values[:-1])
+
+    bearish_divergence = (closes[-1] > prev_price_high) and (rsi_values[-1] < prev_rsi_high)
+    bullish_divergence = (closes[-1] < prev_price_low) and (rsi_values[-1] > prev_rsi_low)
+
+    if bearish_divergence:
+        return {
+            "exists": True,
+            "status": "Bearish RSI Divergence",
+            "type": "bearish",
+            "message": "Price is making a higher high while RSI is making a lower high, suggesting fading momentum."
+        }
+    if bullish_divergence:
+        return {
+            "exists": True,
+            "status": "Bullish RSI Divergence",
+            "type": "bullish",
+            "message": "Price is making a lower low while RSI is making a higher low, suggesting improving momentum."
+        }
+
+    return {
+        "exists": False,
+        "status": "No RSI Divergence",
+        "type": None,
+        "message": "No clear bullish or bearish RSI divergence detected on the weekly chart."
+    }
+
+
+def candle_body(candle):
+    return abs(candle["Close"] - candle["Open"])
+
+
+def upper_wick(candle):
+    return max(candle["Open"], candle["Close"]) - candle["High"]
+
+
+def lower_wick(candle):
+    return candle["Low"] - min(candle["Open"], candle["Close"])
+
+
+def is_bearish_engulfing(current, previous):
+    curr_body = candle_body(current)
+    prev_body = candle_body(previous)
+    return (
+        current["Close"] < current["Open"]
+        and previous["Close"] > previous["Open"]
+        and current["Open"] >= previous["Close"]
+        and current["Close"] <= previous["Open"]
+        and curr_body > prev_body
+    )
+
+
+def is_bullish_engulfing(current, previous):
+    curr_body = candle_body(current)
+    prev_body = candle_body(previous)
+    return (
+        current["Close"] > current["Open"]
+        and previous["Close"] < previous["Open"]
+        and current["Open"] <= previous["Close"]
+        and current["Close"] >= previous["Open"]
+        and curr_body > prev_body
+    )
+
+
+def is_evening_star(current, previous, previous_2):
+    return (
+        current["Close"] < current["Open"]
+        and previous["Close"] > previous["Open"]
+        and previous_2["Close"] > previous_2["Open"]
+        and current["Open"] > previous["Close"]
+        and current["Close"] < ((previous["Open"] + previous["Close"]) / 2)
+    )
+
+
+def is_morning_star(current, previous, previous_2):
+    return (
+        current["Close"] > current["Open"]
+        and previous["Close"] < previous["Open"]
+        and previous_2["Close"] < previous_2["Open"]
+        and current["Open"] < previous["Close"]
+        and current["Close"] > ((previous["Open"] + previous["Close"]) / 2)
+    )
+
+
+def is_shooting_star(current):
+    body = candle_body(current)
+    uw = upper_wick(current)
+    lw = lower_wick(current)
+    return body > 0 and uw > (2 * body) and lw < body and current["Close"] < current["Open"]
+
+
+def is_hammer(current):
+    body = candle_body(current)
+    uw = upper_wick(current)
+    lw = lower_wick(current)
+    return body > 0 and lw > (2 * body) and uw < body and current["Close"] > current["Open"]
+
+
+def detect_weekly_patterns(df):
+    if len(df) < 3:
+        return {
+            "exists": False,
+            "patterns": [],
+            "primary_pattern": "No weekly pattern detected",
+            "message": "Not enough weekly candles for pattern scanning."
+        }
+
+    current = df.iloc[-1].to_dict()
+    previous = df.iloc[-2].to_dict()
+    previous_2 = df.iloc[-3].to_dict()
+
+    patterns = []
+
+    if is_bearish_engulfing(current, previous):
+        patterns.append("Bearish Engulfing")
+    if is_evening_star(current, previous, previous_2):
+        patterns.append("Evening Star")
+    if is_shooting_star(current):
+        patterns.append("Shooting Star")
+    if is_bullish_engulfing(current, previous):
+        patterns.append("Bullish Engulfing")
+    if is_morning_star(current, previous, previous_2):
+        patterns.append("Morning Star")
+    if is_hammer(current):
+        patterns.append("Hammer")
+
+    primary_pattern = patterns[0] if patterns else "No weekly pattern detected"
+    return {
+        "exists": bool(patterns),
+        "patterns": patterns,
+        "primary_pattern": primary_pattern,
+        "message": f"Detected weekly candlestick pattern(s): {', '.join(patterns)}" if patterns else "No weekly reversal or continuation pattern detected for the latest candles."
+    }
+
 # Layout UI Filters
 col1, col2 = st.columns(2)
 with col1:
@@ -87,6 +262,9 @@ with st.spinner(f"Pulling real-time market matrix for {selected_stock}..."):
         hist_daily['LowerBB'] = hist_daily['MA20'] - (2 * hist_daily['STD20'])
         bb_bandwidth = (hist_daily['UpperBB'].iloc[-1] - hist_daily['LowerBB'].iloc[-1]) / hist_daily['MA20'].iloc[-1]
         is_squeeze = "Active Squeeze (Low Volatility Consolidation)" if bb_bandwidth < 0.08 else "Bandwidth Expanded (High Volatility Trend)"
+        weekly_squeeze = detect_bollinger_squeeze(hist_weekly)
+        weekly_divergence = detect_rsi_divergence(hist_weekly)
+        weekly_patterns = detect_weekly_patterns(hist_weekly)
         
         # 3. Standard Pivots (Classic Daily Setup)
         high = hist_daily['High'].iloc[-2]
@@ -134,10 +312,10 @@ with st.spinner(f"Pulling real-time market matrix for {selected_stock}..."):
             c_col, p_col = st.columns(2)
             with c_col:
                 st.metric(label="🛡️ RECOMMENDED CALL SELLING STRIKE (CE)", value=f"₹{recommended_call_strike:,.0f}")
-                st.write(f"• **Positioning:** Short Call strategy (Bearish/Neutral premium collection)\n\n• **Margin Safety Buffer:** Needs underlying asset to surge **+{((recommended_call_strike - spot_price) / spot_price * 100):.1f}%** above spot to approach target zone.")
+                st.write(f"• **Positioning:** Short Call strategy (Bearish/Neutral premium collection)\n\n• **Margin Safety Buffer:** Needs underlying asset to surge **+{((recommended_call_strike - spot_price) / spot_price * 100):.1f}%** from spot to maintain a prudent cushion.")
             with p_col:
                 st.metric(label="🛡️ RECOMMENDED PUT SELLING STRIKE (PE)", value=f"₹{recommended_put_strike:,.0f}")
-                st.write(f"• **Positioning:** Short Put strategy (Bullish/Neutral premium collection)\n\n• **Margin Safety Buffer:** Protected against market drops down to **-{((spot_price - recommended_put_strike) / spot_price * 100):.1f}%** from spot.")
+                st.write(f"• **Positioning:** Short Put strategy (Bullish/Neutral premium collection)\n\n• **Margin Safety Buffer:** Protected against a market drop down to **-{((spot_price - recommended_put_strike) / spot_price * 100):.1f}%** from spot before losing the premium edge.")
 
         with t2:
             m1, m2, m3 = st.columns(3)
@@ -145,6 +323,36 @@ with st.spinner(f"Pulling real-time market matrix for {selected_stock}..."):
             m2.metric("Weekly 14-Period RSI", f"{weekly_rsi:.1f}")
             m3.metric("Candlestick Trigger", "Scanned Signal", delta=pattern)
             st.text(f"Bollinger Structure Status: {is_squeeze}")
+
+            st.subheader("📉 Weekly Pattern & Structure Scanner")
+            pattern_status = "✅ Pattern exists" if weekly_patterns["exists"] else "❌ No pattern exists"
+            st.info(f"Bollinger Squeeze: {weekly_squeeze['status']} | RSI Divergence: {weekly_divergence['status']} | Weekly Pattern: {pattern_status}")
+
+            pattern_df = pd.DataFrame(
+                {
+                    "Check": [
+                        "Bollinger Squeeze",
+                        "RSI Divergence",
+                        "Candlestick Pattern"
+                    ],
+                    "Status": [
+                        weekly_squeeze["status"],
+                        weekly_divergence["status"],
+                        weekly_patterns["primary_pattern"]
+                    ],
+                    "Detail": [
+                        weekly_squeeze["message"],
+                        weekly_divergence["message"],
+                        weekly_patterns["message"]
+                    ]
+                }
+            )
+            st.table(pattern_df)
+
+            if weekly_patterns["patterns"]:
+                st.success(f"Weekly pattern(s) observed: {', '.join(weekly_patterns['patterns'])}")
+            else:
+                st.warning("No weekly reversal or continuation patterns detected in the latest weekly candles.")
 
         with t3:
             pivot_df = pd.DataFrame({
