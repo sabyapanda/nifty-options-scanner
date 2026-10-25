@@ -204,6 +204,14 @@ def detect_weekly_patterns(df):
     return results
 
 
+def format_yes_no(value):
+    if value == "YES":
+        return "color: green; font-weight: bold"
+    if value == "NO":
+        return "color: red; font-weight: bold"
+    return ""
+
+
 # Layout UI Filters
 col1, col2 = st.columns(2)
 with col1:
@@ -264,29 +272,50 @@ with st.spinner(f"Pulling real-time market matrix for {selected_stock}..."):
         weekly_rsi_divergence = detect_rsi_divergence(hist_weekly)
         weekly_pattern_results = detect_weekly_patterns(hist_weekly)
 
+        bullish_rsi_divergence = "YES" if weekly_rsi_divergence["exists"] and weekly_rsi_divergence["status"] == "Bullish RSI Divergence" else "NO"
+        bearish_rsi_divergence = "YES" if weekly_rsi_divergence["exists"] and weekly_rsi_divergence["status"] == "Bearish RSI Divergence" else "NO"
+
         weekly_summary = pd.DataFrame({
-            "Check": [
-                "Bollinger squeeze",
-                "RSI divergence",
-                "Bearish engulfing",
-                "Evening star",
-                "Shooting star",
+            "Pattern": [
+                "Bullish RSI divergence",
                 "Bullish engulfing",
                 "Morning star",
                 "Hammer",
+                "Bollinger squeeze",
+                "Bearish RSI divergence",
+                "Bearish engulfing",
+                "Evening star",
+                "Shooting star",
             ],
-            "Exists": [
-                weekly_bollinger["exists"],
-                weekly_rsi_divergence["exists"],
-                weekly_pattern_results["bearish_engulfing"],
-                weekly_pattern_results["evening_star"],
-                weekly_pattern_results["shooting_star"],
-                weekly_pattern_results["bullish_engulfing"],
-                weekly_pattern_results["morning_star"],
-                weekly_pattern_results["hammer"],
+            "Status": [
+                bullish_rsi_divergence,
+                "YES" if weekly_pattern_results["bullish_engulfing"] else "NO",
+                "YES" if weekly_pattern_results["morning_star"] else "NO",
+                "YES" if weekly_pattern_results["hammer"] else "NO",
+                "YES" if weekly_bollinger["exists"] else "NO",
+                bearish_rsi_divergence,
+                "YES" if weekly_pattern_results["bearish_engulfing"] else "NO",
+                "YES" if weekly_pattern_results["evening_star"] else "NO",
+                "YES" if weekly_pattern_results["shooting_star"] else "NO",
+            ],
+            "Sentiment": [
+                "Bullish",
+                "Bullish",
+                "Bullish",
+                "Bullish",
+                "Neutral",
+                "Bearish",
+                "Bearish",
+                "Bearish",
+                "Bearish",
             ]
         })
-        weekly_summary["Exists"] = weekly_summary["Exists"].map({True: "Yes", False: "No"})
+
+        sentiment_rank = {"Bullish": 0, "Neutral": 1, "Bearish": 2}
+        weekly_summary["sentiment_order"] = weekly_summary["Sentiment"].map(sentiment_rank)
+        weekly_summary = weekly_summary.sort_values(["sentiment_order", "Pattern"]).drop(columns=["sentiment_order"]).reset_index(drop=True)
+
+        weekly_summary_styler = weekly_summary.style.applymap(format_yes_no, subset=["Status"]).set_properties(**{"text-align": "center"})
 
         # Math Modeling for 90-95% Profit Recommendation
         days_to_expiry = max((selected_expiry - datetime.now().date()).days, 1)
@@ -326,7 +355,7 @@ with st.spinner(f"Pulling real-time market matrix for {selected_stock}..."):
             st.text(f"Bollinger Structure Status: {is_squeeze}")
 
             st.subheader(f"📉 Weekly Formations: {selected_stock}")
-            st.table(weekly_summary)
+            st.dataframe(weekly_summary_styler, use_container_width=True, hide_index=True)
 
             st.caption(
                 f"Bollinger squeeze: {weekly_bollinger['status']} | RSI divergence: {weekly_rsi_divergence['status']}"
