@@ -12,15 +12,16 @@ st.caption("Live Local Analysis Engine for Indian Stock Derivatives")
 
 # Top 25 Nifty 50 Tickers (Mapped to Yahoo Finance extensions)
 NIFTY_25 = {
-    "RELIANCE": "RELIANCE.NS", "TCS": "TCS.NS", "HDFCBANK": "HDFCBANK.NS", 
-    "INFY": "INFY.NS", "ICICIBANK": "ICICIBANK.NS", "BHARTIARTL": "BHARTIARTL.NS", 
+    "RELIANCE": "RELIANCE.NS", "TCS": "TCS.NS", "HDFCBANK": "HDFCBANK.NS",
+    "INFY": "INFY.NS", "ICICIBANK": "ICICIBANK.NS", "BHARTIARTL": "BHARTIARTL.NS",
     "SBI": "SBIN.NS", "LTIM": "LTIM.NS", "ITC": "ITC.NS", "HINDUNILVR": "HINDUNILVR.NS",
-    "LT": "LT.NS", "BAJFINANCE": "BAJFINANCE.NS", "AXISBANK": "AXISBANK.NS", 
-    "HCLTECH": "HCLTECH.NS", "MARUTI": "MARUTI.NS", "SUNPHARMA": "SUNPHARMA.NS", 
-    "KOTAKBANK": "KOTAKBANK.NS", "TITAN": "TITAN.NS", "ULTRACEMCO": "ULTRACEMCO.NS", 
-    "ASIANPAINT": "ASIANPAINT.NS", "NESTLEIND": "NESTLEIND.NS", "M&M": "M&M.NS", 
+    "LT": "LT.NS", "BAJFINANCE": "BAJFINANCE.NS", "AXISBANK": "AXISBANK.NS",
+    "HCLTECH": "HCLTECH.NS", "MARUTI": "MARUTI.NS", "SUNPHARMA": "SUNPHARMA.NS",
+    "KOTAKBANK": "KOTAKBANK.NS", "TITAN": "TITAN.NS", "ULTRACEMCO": "ULTRACEMCO.NS",
+    "ASIANPAINT": "ASIANPAINT.NS", "NESTLEIND": "NESTLEIND.NS", "M&M": "M&M.NS",
     "POWERGRID": "POWERGRID.NS", "NTPC": "NTPC.NS", "TATASTEEL": "TATASTEEL.NS"
 }
+
 
 # Generate next 12 months last-Tuesday monthly expiries dynamically
 # Nifty 50 monthly options contracts in India typically expire on the last Tuesday of the month.
@@ -46,23 +47,22 @@ def get_monthly_expiries():
 
     return sorted(list(set(expiries)))
 
+
 # Math calculations for RSI
 def calculate_rsi(data, window=14):
     delta = data.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
-    rs = gain / loss
+    gain = delta.clip(lower=0).rolling(window=window).mean()
+    loss = (-delta.clip(upper=0)).rolling(window=window).mean()
+    rs = gain / loss.replace(0, np.nan)
+    rs = rs.fillna(0)
     return 100 - (100 / (1 + rs))
 
 
+# Weekly scan helpers
+
 def detect_bollinger_squeeze(df, threshold=0.08):
     if len(df) < 20:
-        return {
-            "exists": False,
-            "status": "Insufficient weekly data",
-            "bandwidth": None,
-            "message": "Not enough weekly candles to evaluate Bollinger squeeze."
-        }
+        return {"exists": False, "status": "Insufficient weekly data", "bandwidth": None}
 
     df = df.copy()
     df["MA20"] = df["Close"].rolling(20).mean()
@@ -70,24 +70,21 @@ def detect_bollinger_squeeze(df, threshold=0.08):
     df["UpperBB"] = df["MA20"] + (2 * df["STD20"])
     df["LowerBB"] = df["MA20"] - (2 * df["STD20"])
 
+    if pd.isna(df["MA20"].iloc[-1]):
+        return {"exists": False, "status": "Insufficient weekly data", "bandwidth": None}
+
     bandwidth = (df["UpperBB"].iloc[-1] - df["LowerBB"].iloc[-1]) / df["MA20"].iloc[-1]
-    squeeze = bandwidth < threshold
+    exists = bool(bandwidth < threshold)
     return {
-        "exists": bool(squeeze),
-        "status": "Squeeze Active" if squeeze else "Expansion Active",
-        "bandwidth": bandwidth,
-        "message": "Weekly Bollinger squeeze is active." if squeeze else "Weekly Bollinger bands are expanded, indicating higher volatility."
+        "exists": exists,
+        "status": "Squeeze Active" if exists else "Expansion Active",
+        "bandwidth": bandwidth
     }
 
 
 def detect_rsi_divergence(df, lookback=8):
     if len(df) < lookback + 2:
-        return {
-            "exists": False,
-            "status": "Insufficient weekly data",
-            "type": None,
-            "message": "Not enough weekly candles for RSI divergence checking."
-        }
+        return {"exists": False, "status": "No RSI Divergence"}
 
     closes = df["Close"].tail(lookback + 2).to_numpy()
     rsi_values = calculate_rsi(df["Close"]).tail(lookback + 2).to_numpy()
@@ -101,38 +98,25 @@ def detect_rsi_divergence(df, lookback=8):
     bullish_divergence = (closes[-1] < prev_price_low) and (rsi_values[-1] > prev_rsi_low)
 
     if bearish_divergence:
-        return {
-            "exists": True,
-            "status": "Bearish RSI Divergence",
-            "type": "bearish",
-            "message": "Price is making a higher high while RSI is making a lower high, suggesting fading momentum."
-        }
+        return {"exists": True, "status": "Bearish RSI Divergence"}
     if bullish_divergence:
-        return {
-            "exists": True,
-            "status": "Bullish RSI Divergence",
-            "type": "bullish",
-            "message": "Price is making a lower low while RSI is making a higher low, suggesting improving momentum."
-        }
+        return {"exists": True, "status": "Bullish RSI Divergence"}
 
-    return {
-        "exists": False,
-        "status": "No RSI Divergence",
-        "type": None,
-        "message": "No clear bullish or bearish RSI divergence detected on the weekly chart."
-    }
+    return {"exists": False, "status": "No RSI Divergence"}
 
+
+# Candlestick helpers
 
 def candle_body(candle):
     return abs(candle["Close"] - candle["Open"])
 
 
 def upper_wick(candle):
-    return max(candle["Open"], candle["Close"]) - candle["High"]
+    return candle["High"] - max(candle["Open"], candle["Close"])
 
 
 def lower_wick(candle):
-    return candle["Low"] - min(candle["Open"], candle["Close"])
+    return min(candle["Open"], candle["Close"]) - candle["Low"]
 
 
 def is_bearish_engulfing(current, previous):
@@ -181,53 +165,44 @@ def is_morning_star(current, previous, previous_2):
 
 def is_shooting_star(current):
     body = candle_body(current)
-    uw = upper_wick(current)
-    lw = lower_wick(current)
-    return body > 0 and uw > (2 * body) and lw < body and current["Close"] < current["Open"]
+    if body <= 0:
+        return False
+    return upper_wick(current) > (2 * body) and lower_wick(current) < body and current["Close"] < current["Open"]
 
 
 def is_hammer(current):
     body = candle_body(current)
-    uw = upper_wick(current)
-    lw = lower_wick(current)
-    return body > 0 and lw > (2 * body) and uw < body and current["Close"] > current["Open"]
+    if body <= 0:
+        return False
+    return lower_wick(current) > (2 * body) and upper_wick(current) < body and current["Close"] > current["Open"]
 
 
 def detect_weekly_patterns(df):
+    results = {
+        "bearish_engulfing": False,
+        "evening_star": False,
+        "shooting_star": False,
+        "bullish_engulfing": False,
+        "morning_star": False,
+        "hammer": False,
+    }
+
     if len(df) < 3:
-        return {
-            "exists": False,
-            "patterns": [],
-            "primary_pattern": "No weekly pattern detected",
-            "message": "Not enough weekly candles for pattern scanning."
-        }
+        return results
 
     current = df.iloc[-1].to_dict()
     previous = df.iloc[-2].to_dict()
     previous_2 = df.iloc[-3].to_dict()
 
-    patterns = []
+    results["bearish_engulfing"] = bool(is_bearish_engulfing(current, previous))
+    results["evening_star"] = bool(is_evening_star(current, previous, previous_2))
+    results["shooting_star"] = bool(is_shooting_star(current))
+    results["bullish_engulfing"] = bool(is_bullish_engulfing(current, previous))
+    results["morning_star"] = bool(is_morning_star(current, previous, previous_2))
+    results["hammer"] = bool(is_hammer(current))
 
-    if is_bearish_engulfing(current, previous):
-        patterns.append("Bearish Engulfing")
-    if is_evening_star(current, previous, previous_2):
-        patterns.append("Evening Star")
-    if is_shooting_star(current):
-        patterns.append("Shooting Star")
-    if is_bullish_engulfing(current, previous):
-        patterns.append("Bullish Engulfing")
-    if is_morning_star(current, previous, previous_2):
-        patterns.append("Morning Star")
-    if is_hammer(current):
-        patterns.append("Hammer")
+    return results
 
-    primary_pattern = patterns[0] if patterns else "No weekly pattern detected"
-    return {
-        "exists": bool(patterns),
-        "patterns": patterns,
-        "primary_pattern": primary_pattern,
-        "message": f"Detected weekly candlestick pattern(s): {', '.join(patterns)}" if patterns else "No weekly reversal or continuation pattern detected for the latest candles."
-    }
 
 # Layout UI Filters
 col1, col2 = st.columns(2)
@@ -244,17 +219,17 @@ stock = yf.Ticker(ticker_symbol)
 with st.spinner(f"Pulling real-time market matrix for {selected_stock}..."):
     hist_daily = stock.history(period="1y")
     hist_weekly = stock.history(period="2y").resample('W').last()
-    
+
     if len(hist_daily) > 30:
         spot_price = hist_daily['Close'].iloc[-1]
-        
+
         # Technical Indicator Calculations
         # 1. RSI calculations
         hist_daily['RSI'] = calculate_rsi(hist_daily['Close'])
         hist_weekly['RSI'] = calculate_rsi(hist_weekly['Close'])
         daily_rsi = hist_daily['RSI'].iloc[-1]
         weekly_rsi = hist_weekly['RSI'].iloc[-1]
-        
+
         # 2. Bollinger Squeeze Calculation
         hist_daily['MA20'] = hist_daily['Close'].rolling(20).mean()
         hist_daily['STD20'] = hist_daily['Close'].rolling(20).std()
@@ -262,15 +237,12 @@ with st.spinner(f"Pulling real-time market matrix for {selected_stock}..."):
         hist_daily['LowerBB'] = hist_daily['MA20'] - (2 * hist_daily['STD20'])
         bb_bandwidth = (hist_daily['UpperBB'].iloc[-1] - hist_daily['LowerBB'].iloc[-1]) / hist_daily['MA20'].iloc[-1]
         is_squeeze = "Active Squeeze (Low Volatility Consolidation)" if bb_bandwidth < 0.08 else "Bandwidth Expanded (High Volatility Trend)"
-        weekly_squeeze = detect_bollinger_squeeze(hist_weekly)
-        weekly_divergence = detect_rsi_divergence(hist_weekly)
-        weekly_patterns = detect_weekly_patterns(hist_weekly)
-        
+
         # 3. Standard Pivots (Classic Daily Setup)
         high = hist_daily['High'].iloc[-2]
         low = hist_daily['Low'].iloc[-2]
         close = hist_daily['Close'].iloc[-2]
-        
+
         pivot = (high + low + close) / 3
         r1 = (2 * pivot) - low
         s1 = (2 * pivot) - high
@@ -278,7 +250,7 @@ with st.spinner(f"Pulling real-time market matrix for {selected_stock}..."):
         s2 = pivot - (high - low)
         r3 = high + 2 * (pivot - low)
         s3 = low - 2 * (high - pivot)
-        
+
         # 4. Candlestick Scanning
         open_c, high_c, low_c, close_c = hist_daily['Open'].iloc[-1], hist_daily['High'].iloc[-1], hist_daily['Low'].iloc[-1], hist_daily['Close'].iloc[-1]
         pattern = "Neutral Market Churn"
@@ -287,28 +259,57 @@ with st.spinner(f"Pulling real-time market matrix for {selected_stock}..."):
         elif open_c > close_c and (high_c - open_c) > 2 * (open_c - close_c):
             pattern = "Bearish Shooting Star detected"
 
+        # Weekly structural check for the selected stock
+        weekly_bollinger = detect_bollinger_squeeze(hist_weekly)
+        weekly_rsi_divergence = detect_rsi_divergence(hist_weekly)
+        weekly_pattern_results = detect_weekly_patterns(hist_weekly)
+
+        weekly_summary = pd.DataFrame({
+            "Check": [
+                "Bollinger squeeze",
+                "RSI divergence",
+                "Bearish engulfing",
+                "Evening star",
+                "Shooting star",
+                "Bullish engulfing",
+                "Morning star",
+                "Hammer",
+            ],
+            "Exists": [
+                weekly_bollinger["exists"],
+                weekly_rsi_divergence["exists"],
+                weekly_pattern_results["bearish_engulfing"],
+                weekly_pattern_results["evening_star"],
+                weekly_pattern_results["shooting_star"],
+                weekly_pattern_results["bullish_engulfing"],
+                weekly_pattern_results["morning_star"],
+                weekly_pattern_results["hammer"],
+            ]
+        })
+        weekly_summary["Exists"] = weekly_summary["Exists"].map({True: "Yes", False: "No"})
+
         # Math Modeling for 90-95% Profit Recommendation
         days_to_expiry = max((selected_expiry - datetime.now().date()).days, 1)
         # Approximate dynamic annualized Implied Volatility via standard deviation
         log_returns = np.log(hist_daily['Close'] / hist_daily['Close'].shift(1))
-        historical_volatility = log_returns.std() * np.sqrt(252) 
-        
+        historical_volatility = log_returns.std() * np.sqrt(252)
+
         # Target z-score mapping for 90% to 95% single-tail target probability (Delta 0.05 to 0.10)
-        z_score_92 = stats.norm.ppf(0.925) 
+        z_score_92 = stats.norm.ppf(0.925)
         price_std_dev = spot_price * historical_volatility * np.sqrt(days_to_expiry / 365)
-        
+
         recommended_call_strike = round((spot_price + (z_score_92 * price_std_dev)) / 5) * 5
         recommended_put_strike = round((spot_price - (z_score_92 * price_std_dev)) / 5) * 5
-        
+
         # Rendering Dashboard Display blocks
         st.subheader(f"⚡ Current Spot Price: ₹{spot_price:,.2f}")
-        
+
         t1, t2, t3 = st.tabs(["🎯 Dynamic Option Selling Targets", "📈 Volatility & Momentum Matrix", "🧭 Floor Pivot Channels"])
-        
+
         with t1:
             st.markdown(f"### **Optimal Premium Collection Strikes (90%–95% Probability of Profit)**")
             st.info(f"Calculated using an implied monthly annualized volatility model of **{historical_volatility*100:.1f}%** over an allocation window of **{days_to_expiry} days**.")
-            
+
             c_col, p_col = st.columns(2)
             with c_col:
                 st.metric(label="🛡️ RECOMMENDED CALL SELLING STRIKE (CE)", value=f"₹{recommended_call_strike:,.0f}")
@@ -324,35 +325,12 @@ with st.spinner(f"Pulling real-time market matrix for {selected_stock}..."):
             m3.metric("Candlestick Trigger", "Scanned Signal", delta=pattern)
             st.text(f"Bollinger Structure Status: {is_squeeze}")
 
-            st.subheader("📉 Weekly Pattern & Structure Scanner")
-            pattern_status = "✅ Pattern exists" if weekly_patterns["exists"] else "❌ No pattern exists"
-            st.info(f"Bollinger Squeeze: {weekly_squeeze['status']} | RSI Divergence: {weekly_divergence['status']} | Weekly Pattern: {pattern_status}")
+            st.subheader(f"📉 Weekly Formations: {selected_stock}")
+            st.table(weekly_summary)
 
-            pattern_df = pd.DataFrame(
-                {
-                    "Check": [
-                        "Bollinger Squeeze",
-                        "RSI Divergence",
-                        "Candlestick Pattern"
-                    ],
-                    "Status": [
-                        weekly_squeeze["status"],
-                        weekly_divergence["status"],
-                        weekly_patterns["primary_pattern"]
-                    ],
-                    "Detail": [
-                        weekly_squeeze["message"],
-                        weekly_divergence["message"],
-                        weekly_patterns["message"]
-                    ]
-                }
+            st.caption(
+                f"Bollinger squeeze: {weekly_bollinger['status']} | RSI divergence: {weekly_rsi_divergence['status']}"
             )
-            st.table(pattern_df)
-
-            if weekly_patterns["patterns"]:
-                st.success(f"Weekly pattern(s) observed: {', '.join(weekly_patterns['patterns'])}")
-            else:
-                st.warning("No weekly reversal or continuation patterns detected in the latest weekly candles.")
 
         with t3:
             pivot_df = pd.DataFrame({
