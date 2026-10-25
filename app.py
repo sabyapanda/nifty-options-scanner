@@ -315,7 +315,18 @@ with st.spinner(f"Pulling real-time market matrix for {selected_stock}..."):
         weekly_summary["sentiment_order"] = weekly_summary["Sentiment"].map(sentiment_rank)
         weekly_summary = weekly_summary.sort_values(["sentiment_order", "Pattern"]).drop(columns=["sentiment_order"]).reset_index(drop=True)
 
-        weekly_summary_styler = weekly_summary.style.applymap(format_yes_no, subset=["Status"]).set_properties(**{"text-align": "center"})
+        def status_style(value):
+            if value == "YES":
+                return "color: green; font-weight: bold"
+            if value == "NO":
+                return "color: red; font-weight: bold"
+            return ""
+
+        weekly_summary_styler = (
+            weekly_summary.style
+            .apply(lambda row: [status_style(v) for v in row], subset=["Status"])
+            .set_properties(**{"text-align": "center"})
+        )
 
         # Math Modeling for 90-95% Profit Recommendation
         days_to_expiry = max((selected_expiry - datetime.now().date()).days, 1)
