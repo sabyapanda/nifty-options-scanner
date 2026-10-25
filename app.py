@@ -22,22 +22,28 @@ NIFTY_25 = {
     "POWERGRID": "POWERGRID.NS", "NTPC": "NTPC.NS", "TATASTEEL": "TATASTEEL.NS"
 }
 
-# Generate next 12 months last-thursday monthly expiries dynamically
+# Generate next 12 months last-Tuesday monthly expiries dynamically
+# Nifty 50 monthly options contracts in India typically expire on the last Tuesday of the month.
 def get_monthly_expiries():
     expiries = []
     current_date = datetime.now()
-    for i in range(12):
-        target_month = current_date + timedelta(days=i*30)
-        # Find last day of that month
-        if target_month.month == 12:
-            next_m = datetime(target_month.year + 1, 1, 1)
+
+    for month_offset in range(12):
+        year = current_date.year + ((current_date.month - 1 + month_offset) // 12)
+        month = (current_date.month - 1 + month_offset) % 12 + 1
+
+        if month == 12:
+            next_month_first_day = datetime(year + 1, 1, 1)
         else:
-            next_m = datetime(target_month.year, target_month.month + 1, 1)
-        last_day = next_m - timedelta(days=1)
-        # Find last Thursday of that month
-        offset = (last_day.weekday() - 3) % 7
-        last_thursday = last_day - timedelta(days=offset)
-        expiries.append(last_thursday.date())
+            next_month_first_day = datetime(year, month + 1, 1)
+
+        last_day = next_month_first_day - timedelta(days=1)
+
+        # Python weekday: Monday=0, Tuesday=1, ..., Sunday=6
+        offset = (last_day.weekday() - 1) % 7
+        last_tuesday = last_day - timedelta(days=offset)
+        expiries.append(last_tuesday.date())
+
     return sorted(list(set(expiries)))
 
 # Math calculations for RSI
@@ -128,10 +134,10 @@ with st.spinner(f"Pulling real-time market matrix for {selected_stock}..."):
             c_col, p_col = st.columns(2)
             with c_col:
                 st.metric(label="🛡️ RECOMMENDED CALL SELLING STRIKE (CE)", value=f"₹{recommended_call_strike:,.0f}")
-                st.write(f"• **Positioning:** Short Call strategy (Bearish/Neutral premium collection)\n\n• **Margin Safety Buffer:** Needs underlying asset to surge **+{((recommended_call_strike/spot_price)-1)*100:.1f}%** to breach.")
+                st.write(f"• **Positioning:** Short Call strategy (Bearish/Neutral premium collection)\n\n• **Margin Safety Buffer:** Needs underlying asset to surge **+{((recommended_call_strike - spot_price) / spot_price * 100):.1f}%** above spot to approach target zone.")
             with p_col:
                 st.metric(label="🛡️ RECOMMENDED PUT SELLING STRIKE (PE)", value=f"₹{recommended_put_strike:,.0f}")
-                st.write(f"• **Positioning:** Short Put strategy (Bullish/Neutral premium collection)\n\n• **Margin Safety Buffer:** Protected against market drops down to **-{((1-(recommended_put_strike/spot_price)))*100:.1f}%**.")
+                st.write(f"• **Positioning:** Short Put strategy (Bullish/Neutral premium collection)\n\n• **Margin Safety Buffer:** Protected against market drops down to **-{((spot_price - recommended_put_strike) / spot_price * 100):.1f}%** from spot.")
 
         with t2:
             m1, m2, m3 = st.columns(3)
@@ -146,4 +152,3 @@ with st.spinner(f"Pulling real-time market matrix for {selected_stock}..."):
                 "Calculated Strike Threshold (₹)": [r3, r2, r1, pivot, s1, s2, s3]
             })
             st.table(pivot_df.set_index("Technical Layer Boundary").style.format("₹{:#,.2f}"))
-
