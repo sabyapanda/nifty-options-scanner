@@ -1,2 +1,3 @@
 yfinance
 scipy
+pandas<3.0
