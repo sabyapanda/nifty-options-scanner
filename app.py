@@ -315,16 +315,9 @@ with st.spinner(f"Pulling real-time market matrix for {selected_stock}..."):
         weekly_summary["sentiment_order"] = weekly_summary["Sentiment"].map(sentiment_rank)
         weekly_summary = weekly_summary.sort_values(["sentiment_order", "Pattern"]).drop(columns=["sentiment_order"]).reset_index(drop=True)
 
-        def status_style(value):
-            if value == "YES":
-                return "color: green; font-weight: bold"
-            if value == "NO":
-                return "color: red; font-weight: bold"
-            return ""
-
         weekly_summary_styler = (
             weekly_summary.style
-            .apply(lambda row: [status_style(v) for v in row], subset=["Status"])
+            .applymap(format_yes_no, subset=["Status"])
             .set_properties(**{"text-align": "center"})
         )
 
@@ -353,10 +346,10 @@ with st.spinner(f"Pulling real-time market matrix for {selected_stock}..."):
             c_col, p_col = st.columns(2)
             with c_col:
                 st.metric(label="🛡️ RECOMMENDED CALL SELLING STRIKE (CE)", value=f"₹{recommended_call_strike:,.0f}")
-                st.write(f"• **Positioning:** Short Call strategy (Bearish/Neutral premium collection)\n\n• **Margin Safety Buffer:** Needs underlying asset to surge **+{((recommended_call_strike - spot_price) / spot_price * 100):.1f}%** from spot to maintain a prudent cushion.")
+                st.write(f"• **Positioning:** Short Call strategy (Bearish/Neutral premium collection)\n\n• **Margin Safety Buffer:** Needs underlying asset to surge **+{((recommended_call_strike - spot_price) / spot_price * 100):.1f}%** to reach the modeled profit corridor.")
             with p_col:
                 st.metric(label="🛡️ RECOMMENDED PUT SELLING STRIKE (PE)", value=f"₹{recommended_put_strike:,.0f}")
-                st.write(f"• **Positioning:** Short Put strategy (Bullish/Neutral premium collection)\n\n• **Margin Safety Buffer:** Protected against a market drop down to **-{((spot_price - recommended_put_strike) / spot_price * 100):.1f}%** from spot before losing the premium edge.")
+                st.write(f"• **Positioning:** Short Put strategy (Bullish/Neutral premium collection)\n\n• **Margin Safety Buffer:** Protected against a market drop down to **-{((spot_price - recommended_put_strike) / spot_price * 100):.1f}%** below current spot.")
 
         with t2:
             m1, m2, m3 = st.columns(3)
